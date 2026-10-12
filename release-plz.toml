@@ -26,10 +26,10 @@ git_release_body = """
 {{ changelog }}
 """
 changelog_path = "./CHANGELOG.md"
-repo_url = "@REPO_URL@"
+repo_url = "https://github.com/8Mouheb-Baalouch8/example-web-service"
 
 [[package]]
-name = "@MAIN_CRATE@"
+name = "example-web-service"
 git_release_name = "v{{ version }}"
 git_tag_name = "v{{ version }}"
 git_tag_enable = true
@@ -45,7 +45,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -66,46 +66,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 body = """
 {% if version -%}
-    ## [{{ version | trim_start_matches(pat="v") }}]\
     {%- if release_link -%}\
         ({{ release_link }})\
     {% endif %} \
-    - {{ timestamp | date(format="%Y-%m-%d") }}
+- {{ timestamp | date(format="%Y-%m-%d") }}
 {% else -%}
-    ## [Unreleased]
+
 {% endif -%}
 
-### `{{ package }}` - [{{ version }}]{%- if release_link -%}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+
 {% for group, commits in commits | filter(attribute="merge_commit", value=false) | group_by(attribute="group") %}
-#### {{ group | upper_first }}
+
 
 {% for commit in commits | unique(attribute="message")  -%}
 {% if commit.scope -%}
-    - _({{commit.scope}})_ {% if commit.breaking %}[**breaking**] {% endif %}\
+- _({{commit.scope}})_ {% if commit.breaking %}[**breaking**] {% endif %}\
         {{ commit.message }}\
         {% if commit.links %} \
             ({% for link in commit.links %}[{{link.text}}]({{link.href}}) {% endfor -%})\
         {% endif %}
 {% else -%}
-    - {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}
+- {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}
 {% endif -%}
 {% endfor -%}
 {% endfor %}
 """
 
+## [{{ version | trim_start_matches(pat="v") }}]\
+## [Unreleased]
+### `{{ package }}` - [{{ version }}]{%- if release_link -%}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+#### {{ group | upper_first }}
 commit_parsers = [
-  { message = "^feat", group = "Added" },
-  { message = "^fix", group = "Fixed" },
-  { message = "^perf", group = "Changed" },
-  { message = "^refactor", group = "Changed" },
-  { message = "^deprecate", group = "Deprecated" },
-  { message = "^remove", group = "Removed" },
-  { message = "^security", group = "Security" },
-  { message = ".*forward port", group = "other" },
-  { message = "^.*", skip = true },
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Changed" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^deprecate", group = "Deprecated" },
+    { message = "^remove", group = "Removed" },
+    { message = "^security", group = "Security" },
+    { message = ".*forward port", group = "other" },
+    { message = "^.*", skip = true },
 ]
 
 postprocessors = [
-  # Format the rendered changelog using `dprint`
-  { pattern = ".*", replace = "prettier --stdin-filepath CHANGELOG.md" }
+    # Format the rendered changelog using `dprint`
+    { pattern = ".*", replace = "prettier --stdin-filepath CHANGELOG.md" },
 ]
