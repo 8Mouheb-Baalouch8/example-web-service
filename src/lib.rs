@@ -14,11 +14,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use eyre::WrapErr;
 use std::{
     sync::{Arc, Mutex, mpsc},
     thread::{self},
 };
-
+use tracing::{debug, info};
 pub struct ThreadPool {
     _workers: Vec<Worker>,
     sender: mpsc::Sender<Job>,
@@ -64,18 +65,20 @@ impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
         let thread = thread::spawn(move || {
             loop {
-                let job;
-                match receiver.lock() {
-                    Ok(e) => match e.recv() {
-                        Ok(j) => job = j,
-                        Err(_) => break,
-                    },
-                    Err(_) => break,
+                let job_res = match receiver.lock() {
+                    Ok(e) => e.recv().wrap_err("Channel hung up"),
+                    Err(e) => Err(eyre::eyre!("Receiver mutex poisoned: {e}")),
+                };
+
+                info!("Worker {id} got a job; executing.");
+
+                match job_res {
+                    Ok(job) => job(),
+                    Err(e) => {
+                        debug!("{e}");
+                        return;
+                    }
                 }
-
-                println!("Worker {id} got a job; executing.");
-
-                job();
             }
         });
 
