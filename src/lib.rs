@@ -21,7 +21,7 @@ use std::{
 };
 use tracing::{debug, info};
 pub struct ThreadPool {
-    _workers: Vec<Worker>,
+    workers: Vec<Worker>,
     sender: mpsc::Sender<Job>,
 }
 
@@ -40,10 +40,7 @@ impl ThreadPool {
             workers.push(Worker::new(id, Arc::clone(&receiver)));
         }
 
-        ThreadPool {
-            _workers: workers,
-            sender,
-        }
+        ThreadPool { workers, sender }
     }
     pub fn execute<F>(&self, f: F)
     where
@@ -56,9 +53,22 @@ impl ThreadPool {
     }
 }
 
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        let (tx, _) = mpsc::channel();
+        drop(std::mem::replace(&mut self.sender, tx));
+
+        for worker in self.workers.drain(..) {
+            println!("Shutting down worker {}", worker.id);
+
+            worker.thread.join().unwrap();
+        }
+    }
+}
+
 struct Worker {
-    _id: usize,
-    _thread: thread::JoinHandle<()>,
+    id: usize,
+    thread: thread::JoinHandle<()>,
 }
 
 impl Worker {
@@ -82,9 +92,6 @@ impl Worker {
             }
         });
 
-        Worker {
-            _id: id,
-            _thread: thread,
-        }
+        Worker { id, thread }
     }
 }
