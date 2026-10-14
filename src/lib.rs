@@ -16,12 +16,10 @@
 
 use eyre::WrapErr;
 use std::{
-    clone,
-    fmt::Error,
     sync::{Arc, Mutex, mpsc},
-    thread::{self, JoinHandle},
+    thread::{self},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 pub struct ThreadPool {
     workers: Vec<Worker>,
     sender: mpsc::Sender<Job>,
@@ -49,9 +47,21 @@ impl ThreadPool {
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(f);
-        match self.sender.send(job) {
-            Ok(e) => e,
-            Err(_) => (),
+        if let Ok(e) = self.sender.send(job) {
+            e
+        }
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        let (tx, _) = mpsc::channel();
+        drop(std::mem::replace(&mut self.sender, tx));
+
+        for worker in self.workers.drain(..) {
+            println!("Shutting down worker {}", worker.id);
+
+            worker.thread.join().unwrap();
         }
     }
 }
@@ -65,11 +75,10 @@ impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
         let thread = thread::spawn(move || {
             loop {
-                let job_res;
-                match receiver.lock() {
-                    Ok(e) => job_res = e.recv().wrap_err("Channel hung up"),
-                    Err(e) => job_res = Err(eyre::eyre!("Receiver mutex poisoned: {e}")),
-                }
+                let job_res = match receiver.lock() {
+                    Ok(e) => e.recv().wrap_err("Channel hung up"),
+                    Err(e) => Err(eyre::eyre!("Receiver mutex poisoned: {e}")),
+                };
 
                 info!("Worker {id} got a job; executing.");
 

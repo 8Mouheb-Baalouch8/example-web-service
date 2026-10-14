@@ -41,8 +41,7 @@ listPackage() {
 }
 
 pkgsFiles=$(
-    cat <(cargo package --allow-dirty -l -p "@MAIN_CRATE@") \
-        <(listPackage "@CRATE@") |
+    cat <(cargo package --allow-dirty -l -p "example-web-service") |
         sort
 )
 localFiles=$(

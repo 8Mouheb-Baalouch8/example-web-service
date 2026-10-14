@@ -71,7 +71,7 @@ gethtml_wrapper() {
 
 }
 
-crate="@MAIN_CRATE@"
+crate="example-web-service"
 
 # Clean up old coverage artifacts
 rm -rf "$CARGO_TARGET_DIR/lcov" || true

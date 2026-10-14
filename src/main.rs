@@ -14,19 +14,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::path::{Component, Path, PathBuf};
 use std::{
-    fmt::format,
-    fs,
-    io::{BufReader, prelude::*},
+    fs::{self},
+    io::{self, BufReader, BufWriter, ErrorKind, prelude::*},
     net::{TcpListener, TcpStream},
-    thread,
-    time::Duration,
 };
 
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use example_web_service::ThreadPool;
-use eyre::Context;
+use eyre::{Context, OptionExt, eyre};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tracing::instrument]
@@ -50,11 +48,12 @@ fn main() -> eyre::Result<()> {
     for stream in listener.incoming() {
         let stream = stream.wrap_err("couldnt receive incoming connection")?;
 
-        pool.execute(|| {
-            if let Ok(_) = handle_connection(stream) {
+        pool.execute(|| match handle_connection(stream) {
+            Ok(()) => {
                 info!("connection established");
-            } else {
-                debug!("connection failed");
+            }
+            Err(error) => {
+                error!(%error ,"connection failed");
             }
         });
     }
@@ -62,36 +61,92 @@ fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-fn handle_connection(mut stream: TcpStream) -> eyre::Result<()> {
-    let buf_reader = BufReader::new(&stream);
-    let mut http_request = String::new();
-    match buf_reader.lines().next() {
-        Some(e) => http_request = e?,
-        None => (),
-    };
-    let (status_line, filename) = match http_request.as_str() {
-        "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
-        "GET /sleep HTTP/1.1" => {
-            thread::sleep(Duration::from_secs(10));
-            ("HTTP/1.1 200 OK", "hello.html")
+struct Buffer<'a> {
+    reader: BufReader<&'a TcpStream>,
+    writer: BufWriter<&'a TcpStream>,
+}
+
+impl<'a> Buffer<'a> {
+    fn new(r: BufReader<&'a TcpStream>, w: BufWriter<&'a TcpStream>) -> Buffer<'a> {
+        let reader = r;
+        let writer = w;
+        Buffer { reader, writer }
+    }
+
+    fn read_request(&mut self) -> Result<String, io::Error> {
+        match self.reader.by_ref().lines().next() {
+            Some(Ok(request)) => Ok(request),
+            Some(Err(error)) => Err(error),
+            None => Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "cannot read the request",
+            )),
         }
-        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
+    }
+}
+fn parse_http_request(http_request: &str) -> eyre::Result<(&str, &str, &str)> {
+    let mut request_fields = http_request.split_whitespace();
+    let method = request_fields.next().ok_or_eyre("missing HTTP method")?;
+    let path = request_fields
+        .next()
+        .ok_or_eyre("missing path")?
+        .trim_start_matches('/');
+    let version = request_fields.next().ok_or_eyre("missing version")?;
+    Ok((method, path, version))
+}
+
+fn handle_connection(stream: TcpStream) -> eyre::Result<()> {
+    let mut buf = Buffer::new(BufReader::new(&stream), BufWriter::new(&stream));
+
+    let http_request = buf.read_request()?;
+
+    let (_method, path, version) = parse_http_request(&http_request)?;
+
+    let path = Path::new(path);
+
+    if !path.components().all(|c| matches!(c, Component::Normal(_))) {
+        return Err(eyre!("not a normal path"));
+    }
+
+    let mut file_path = PathBuf::from("html_pages");
+    file_path.push(path);
+    file_path.as_mut_os_string().push(".html");
+
+    let (status_line, mut contents) = match fs::File::open(&file_path) {
+        Ok(cte) => ("200 Ok", cte),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            debug!(path = %file_path.display(), "file doesnt exist");
+
+            (
+                "400 NOT FOUND",
+                fs::File::open("html_pages/404.html").wrap_err("couldnt find 404 page")?,
+            )
+        }
+        Err(error) => {
+            error!(%error, path = %&file_path.display(), "couldnt read the file");
+            (
+                "500 INTERNAL SERVER ERROR",
+                fs::File::open("html_pages/500.html").wrap_err("couldnt find 500 page")?,
+            )
+        }
     };
 
-    let contents = fs::read_to_string(filename)?;
-    let length = contents.len();
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
-
-    stream.write_all(response.as_bytes())?;
-
-    //let response = "HTTP/1.1 200 OK\r\n\r\n";
+    let length = contents.metadata()?.len();
+    write!(
+        &mut buf.writer,
+        "{version} {status_line}\r\nContent-Length: {length}\r\n\r\n"
+    )?;
+    io::copy(&mut contents, &mut buf.writer)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn idk() {
-        assert!(true);
+    fn req() {
+        use super::*;
+        let http_request = "GET /hello HTTP/1.1";
+        let (_method, _path, version) = parse_http_request(http_request).unwrap();
+        assert_eq!("HTTP/1.1", version);
     }
 }
