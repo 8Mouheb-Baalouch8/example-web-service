@@ -14,21 +14,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
-use std::{
-    fs::{self},
-    io::{self, BufReader, BufWriter, ErrorKind, prelude::*},
-    net::{TcpListener, TcpStream},
-};
 
-use tracing::{debug, error, info, warn};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tracing::{debug, error, info};
 
-use example_web_service::ThreadPool;
-use eyre::{Context, OptionExt, eyre};
+use eyre::{OptionExt, eyre};
+
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
+
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+struct Buffer {
+    reader: BufReader<OwnedReadHalf>,
+    writer: BufWriter<OwnedWriteHalf>,
+}
+
+impl Buffer {
+    fn new(socket: TcpStream) -> Buffer {
+        let (read, write) = socket.into_split();
+        let reader = BufReader::new(read);
+        let writer = BufWriter::new(write);
+        Buffer { reader, writer }
+    }
+
+    async fn read_request(&mut self) -> Result<String, eyre::ErrReport> {
+        let mut request_line = String::new();
+        self.reader.read_line(&mut request_line).await?;
+
+        Ok(request_line)
+    }
+}
+
 #[tracing::instrument]
-fn main() -> eyre::Result<()> {
+#[tokio::main]
+async fn main() -> eyre::Result<()> {
     color_eyre::install()?;
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
@@ -38,52 +61,25 @@ fn main() -> eyre::Result<()> {
                 .from_env_lossy(),
         )
         .try_init()?;
+    let listener = TcpListener::bind("127.0.0.1:7878").await.unwrap();
 
-    let listener = TcpListener::bind("127.0.0.1:7878")?;
-
-    let addr = listener.local_addr()?;
-    info!("listening on http://{addr}");
-
-    let pool = ThreadPool::new(4);
-    for stream in listener.incoming() {
-        let stream = stream.wrap_err("couldnt receive incoming connection")?;
-
-        pool.execute(|| match handle_connection(stream) {
-            Ok(()) => {
-                info!("connection established");
-            }
-            Err(error) => {
-                error!(%error ,"connection failed");
+    loop {
+        let (socket, _) = listener.accept().await.unwrap();
+        // A new task is spawned for each inbound socket. The socket is
+        // moved to the new task and processed there.
+        tokio::spawn(async move {
+            match handle_connection(socket).await {
+                Ok(()) => {
+                    info!("connection established");
+                }
+                Err(error) => {
+                    error!(%error ,"connection failed");
+                }
             }
         });
     }
-
-    Ok(())
 }
 
-struct Buffer<'a> {
-    reader: BufReader<&'a TcpStream>,
-    writer: BufWriter<&'a TcpStream>,
-}
-
-impl<'a> Buffer<'a> {
-    fn new(r: BufReader<&'a TcpStream>, w: BufWriter<&'a TcpStream>) -> Buffer<'a> {
-        let reader = r;
-        let writer = w;
-        Buffer { reader, writer }
-    }
-
-    fn read_request(&mut self) -> Result<String, io::Error> {
-        match self.reader.by_ref().lines().next() {
-            Some(Ok(request)) => Ok(request),
-            Some(Err(error)) => Err(error),
-            None => Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "cannot read the request",
-            )),
-        }
-    }
-}
 fn parse_http_request(http_request: &str) -> eyre::Result<(&str, &str, &str)> {
     let mut request_fields = http_request.split_whitespace();
     let method = request_fields.next().ok_or_eyre("missing HTTP method")?;
@@ -95,13 +91,12 @@ fn parse_http_request(http_request: &str) -> eyre::Result<(&str, &str, &str)> {
     Ok((method, path, version))
 }
 
-fn handle_connection(stream: TcpStream) -> eyre::Result<()> {
-    let mut buf = Buffer::new(BufReader::new(&stream), BufWriter::new(&stream));
+async fn handle_connection(socket: TcpStream) -> eyre::Result<()> {
+    let mut buf = Buffer::new(socket);
 
-    let http_request = buf.read_request()?;
+    let http_request = buf.read_request().await?;
 
     let (_method, path, version) = parse_http_request(&http_request)?;
-
     let path = Path::new(path);
 
     if !path.components().all(|c| matches!(c, Component::Normal(_))) {
@@ -112,33 +107,35 @@ fn handle_connection(stream: TcpStream) -> eyre::Result<()> {
     file_path.push(path);
     file_path.as_mut_os_string().push(".html");
 
-    let (status_line, mut contents) = write_in_stream(file_path)?;
+    let (status_line, mut contents) = write_in_stream(file_path).await?;
 
-    let length = contents.metadata()?.len();
-    write!(
-        &mut buf.writer,
-        "{version} {status_line}\r\nContent-Length: {length}\r\n\r\n"
-    )?;
-    io::copy(&mut contents, &mut buf.writer)?;
+    let length = contents.metadata().await?.len();
+    buf.writer
+        .write_all(
+            format!("{version} {status_line}\r\nContent-Length: {length}\r\n\r\n").as_bytes(),
+        )
+        .await?;
+    tokio::io::copy(&mut contents, &mut buf.writer).await?;
+    buf.writer.flush().await?;
     Ok(())
 }
 
-fn write_in_stream(file_path: PathBuf) -> Result<(String, fs::File), eyre::Error> {
-    let (status_line, contents) = match fs::File::open(&file_path) {
+async fn write_in_stream(file_path: PathBuf) -> Result<(String, tokio::fs::File), eyre::Error> {
+    let (status_line, contents) = match tokio::fs::File::open(&file_path).await {
         Ok(cte) => ("200 Ok", cte),
         Err(err) if err.kind() == ErrorKind::NotFound => {
             debug!(path = %file_path.display(), "file doesnt exist");
 
             (
                 "400 NOT FOUND",
-                fs::File::open("html_pages/404.html").wrap_err("couldnt find 404 page")?,
+                tokio::fs::File::open("html_pages/404.html").await?,
             )
         }
         Err(error) => {
             error!(%error, path = %&file_path.display(), "couldnt read the file");
             (
                 "500 INTERNAL SERVER ERROR",
-                fs::File::open("html_pages/500.html").wrap_err("couldnt find 500 page")?,
+                tokio::fs::File::open("html_pages/500.html").await?,
             )
         }
     };
@@ -155,9 +152,11 @@ mod tests {
         let (_method, _path, version) = parse_http_request(http_request).unwrap();
         assert_eq!("HTTP/1.1", version);
     }
-    #[test]
-    fn status_line_test() {
-        let (status_line, _) = write_in_stream(PathBuf::from("html_pages/hello.html")).unwrap();
+    #[tokio::test]
+    async fn status_line_test() {
+        let (status_line, _) = write_in_stream(PathBuf::from("html_pages/hello.html"))
+            .await
+            .unwrap();
         assert_eq!(status_line, "200 Ok".to_string());
     }
 }
