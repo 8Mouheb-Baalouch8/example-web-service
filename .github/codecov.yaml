@@ -54,8 +54,8 @@ component_management:
           - "!master"
           - "!release-[0-9]+.[0-9]+"
   individual_components:
-    - component_id: "@MAIN_CRATE@"
-      name: "@MAIN_CRATE@"
+    - component_id: "example-web-service"
+      name: "example-web-service"
       paths:
         - src/**
         - src/*

@@ -44,7 +44,7 @@ env:
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
   NEXTEST_PROFILE: "ci"
-  MAIN_CRATE: "@MAIN_CRATE@"
+  MAIN_CRATE: "example-web-service"
   EXPORT_FOR_CI: "true"
 
 jobs:
