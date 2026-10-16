@@ -26,10 +26,10 @@ git_release_body = """
 {{ changelog }}
 """
 changelog_path = "./CHANGELOG.md"
-repo_url = "@REPO_URL@"
+repo_url = "https://github.com/8Mouheb-Baalouch8/example-web-service"
 
 [[package]]
-name = "@MAIN_CRATE@"
+name = "example-web-service"
 git_release_name = "v{{ version }}"
 git_tag_name = "v{{ version }}"
 git_tag_enable = true
@@ -94,18 +94,18 @@ body = """
 """
 
 commit_parsers = [
-  { message = "^feat", group = "Added" },
-  { message = "^fix", group = "Fixed" },
-  { message = "^perf", group = "Changed" },
-  { message = "^refactor", group = "Changed" },
-  { message = "^deprecate", group = "Deprecated" },
-  { message = "^remove", group = "Removed" },
-  { message = "^security", group = "Security" },
-  { message = ".*forward port", group = "other" },
-  { message = "^.*", skip = true },
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Changed" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^deprecate", group = "Deprecated" },
+    { message = "^remove", group = "Removed" },
+    { message = "^security", group = "Security" },
+    { message = ".*forward port", group = "other" },
+    { message = "^.*", skip = true },
 ]
 
 postprocessors = [
-  # Format the rendered changelog using `dprint`
-  { pattern = ".*", replace = "prettier --stdin-filepath CHANGELOG.md" }
+    # Format the rendered changelog using `dprint`
+    { pattern = ".*", replace = "prettier --stdin-filepath CHANGELOG.md" },
 ]
