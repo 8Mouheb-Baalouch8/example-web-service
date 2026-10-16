@@ -13,3 +13,85 @@
 // limitations under the License.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+use eyre::WrapErr;
+use std::{
+    sync::{Arc, Mutex, mpsc},
+    thread::{self},
+};
+use tracing::{debug, info};
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: mpsc::Sender<Job>,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+impl ThreadPool {
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
+
+        ThreadPool { workers, sender }
+    }
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+        if let Ok(e) = self.sender.send(job) {
+            e
+        }
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        let (tx, _) = mpsc::channel();
+        drop(std::mem::replace(&mut self.sender, tx));
+
+        for worker in self.workers.drain(..) {
+            println!("Shutting down worker {}", worker.id);
+
+            worker.thread.join().unwrap();
+        }
+    }
+}
+
+struct Worker {
+    id: usize,
+    thread: thread::JoinHandle<()>,
+}
+
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+        let thread = thread::spawn(move || {
+            loop {
+                let job_res = match receiver.lock() {
+                    Ok(e) => e.recv().wrap_err("Channel hung up"),
+                    Err(e) => Err(eyre::eyre!("Receiver mutex poisoned: {e}")),
+                };
+
+                info!("Worker {id} got a job; executing.");
+
+                match job_res {
+                    Ok(job) => job(),
+                    Err(e) => {
+                        debug!("{e}");
+                        return;
+                    }
+                }
+            }
+        });
+
+        Worker { id, thread }
+    }
+}
