@@ -41,7 +41,7 @@ env:
   RUSTFLAGS: -D warnings
   RUSTDOCFLAGS: -D warnings
   NEXTEST_PROFILE: "ci"
-  MAIN_CRATE: "@MAIN_CRATE@"
+  MAIN_CRATE: "example-web-service"
   EXPORT_FOR_CI: "true"
 
 jobs:
@@ -49,7 +49,7 @@ jobs:
   release-plz-release:
     name: release-plz-release
     runs-on: ubuntu-26.04
-    if: github.repository_owner == '@REPOSITORY_OWNER@'
+    if: github.repository_owner == '8Mouheb-Baalouch8'
     permissions:
       contents: write # Needed to push to the release PR branch, tag and release
       id-token: write # Needed to authenticate with crates.io
@@ -78,7 +78,7 @@ jobs:
   release-plz-pr:
     name: release-plz-pr
     runs-on: ubuntu-26.04
-    if: github.repository_owner == '@REPOSITORY_OWNER@'
+    if: github.repository_owner == '8Mouheb-Baalouch8'
     permissions:
       contents: write # Needed to push to the release PR branch, tag and release
       pull-requests: write # Needed to read the release PRs

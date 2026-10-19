@@ -14,14 +14,73 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-fn main() {
-    println!("Hello, world!");
+use std::{
+    fs,
+    io::{BufReader, BufWriter, prelude::*},
+    net::{TcpListener, TcpStream},
+    thread,
+    time::Duration,
+};
+
+use example_web_service::ThreadPool;
+use eyre::Context;
+
+fn main() -> eyre::Result<()> {
+    color_eyre::install()?;
+    let listener = TcpListener::bind("127.0.0.1:7878")?;
+    let pool = ThreadPool::new(4);
+    for stream in listener.incoming() {
+        let stream = stream.wrap_err("couldnt receive incoming connection")?;
+        pool.execute(|| {
+            if handle_connection(stream).is_ok() {
+                println!("connection established");
+            } else {
+                println!("connection failed");
+            }
+        });
+    }
+
+    Ok(())
+}
+fn handle_connection(stream: TcpStream) -> eyre::Result<()> {
+    let buf_reader = BufReader::new(&stream);
+    let mut buf_writer = BufWriter::new(&stream);
+    let mut http_request = String::new();
+    if let Some(e) = buf_reader.lines().next() {
+        http_request = e?
+    }
+    write_in_stream(&mut buf_writer, http_request)?;
+    Ok(())
+}
+
+fn write_in_stream<T>(writer: &mut T, http_request: String) -> Result<(), eyre::Error>
+where
+    T: Write,
+{
+    let (status_line, filename) = match &http_request[..] {
+        "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
+        "GET /sleep HTTP/1.1" => {
+            thread::sleep(Duration::from_secs(10));
+            ("HTTP/1.1 200 OK", "hello.html")
+        }
+        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
+    };
+    let contents = fs::read_to_string(filename)?;
+    let length = contents.len();
+    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
+    writer.write_all(response.as_bytes())?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
-    fn idk() {
-        assert!(true);
+    fn http_req_test() {
+        let mut written_response = Vec::new();
+        let http_request = "GET / HTTP/1.1".to_string();
+        let http_response = "HTTP/1.1 200 OK".as_bytes();
+        write_in_stream(&mut written_response, http_request).unwrap();
+        assert_eq!(&written_response[..15], http_response);
     }
 }
