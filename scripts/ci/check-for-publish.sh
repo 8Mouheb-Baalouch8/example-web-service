@@ -41,7 +41,8 @@ listPackage() {
 }
 
 pkgsFiles=$(
-    cargo package --allow-dirty -l -p "example-web-service" |
+    cat <(cargo package --allow-dirty -l -p "example-web-service") \
+        <(listPackage "client") |
         sort -i |
         uniq
 )
