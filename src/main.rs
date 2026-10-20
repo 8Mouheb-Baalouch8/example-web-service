@@ -14,18 +14,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::path::{Component, Path, PathBuf};
 use std::{
-    fs,
-    io::{BufReader, BufWriter, prelude::*},
+    fs::{self},
+    io::{self, BufReader, BufWriter, ErrorKind, prelude::*},
     net::{TcpListener, TcpStream},
-    thread,
-    time::Duration,
 };
 
-use tracing::{debug, info};
+use tracing::{debug, error, info, warn};
 
 use example_web_service::ThreadPool;
-use eyre::Context;
+use eyre::{Context, OptionExt, eyre};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tracing::instrument]
@@ -48,11 +47,13 @@ fn main() -> eyre::Result<()> {
     let pool = ThreadPool::new(4);
     for stream in listener.incoming() {
         let stream = stream.wrap_err("couldnt receive incoming connection")?;
-        pool.execute(|| {
-            if handle_connection(stream).is_ok() {
+
+        pool.execute(|| match handle_connection(stream) {
+            Ok(()) => {
                 info!("connection established");
-            } else {
-                debug!("connection failed");
+            }
+            Err(error) => {
+                error!(%error ,"connection failed");
             }
         });
     }
@@ -60,45 +61,103 @@ fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-fn handle_connection(stream: TcpStream) -> eyre::Result<()> {
-    let buf_reader = BufReader::new(&stream);
-    let mut buf_writer = BufWriter::new(&stream);
-    let mut http_request = String::new();
-    if let Some(e) = buf_reader.lines().next() {
-        http_request = e?
+struct Buffer<'a> {
+    reader: BufReader<&'a TcpStream>,
+    writer: BufWriter<&'a TcpStream>,
+}
+
+impl<'a> Buffer<'a> {
+    fn new(r: BufReader<&'a TcpStream>, w: BufWriter<&'a TcpStream>) -> Buffer<'a> {
+        let reader = r;
+        let writer = w;
+        Buffer { reader, writer }
     }
-    write_in_stream(&mut buf_writer, http_request)?;
+
+    fn read_request(&mut self) -> Result<String, io::Error> {
+        match self.reader.by_ref().lines().next() {
+            Some(Ok(request)) => Ok(request),
+            Some(Err(error)) => Err(error),
+            None => Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "cannot read the request",
+            )),
+        }
+    }
+}
+fn parse_http_request(http_request: &str) -> eyre::Result<(&str, &str, &str)> {
+    let mut request_fields = http_request.split_whitespace();
+    let method = request_fields.next().ok_or_eyre("missing HTTP method")?;
+    let path = request_fields
+        .next()
+        .ok_or_eyre("missing path")?
+        .trim_start_matches('/');
+    let version = request_fields.next().ok_or_eyre("missing version")?;
+    Ok((method, path, version))
+}
+
+fn handle_connection(stream: TcpStream) -> eyre::Result<()> {
+    let mut buf = Buffer::new(BufReader::new(&stream), BufWriter::new(&stream));
+
+    let http_request = buf.read_request()?;
+
+    let (_method, path, version) = parse_http_request(&http_request)?;
+
+    let path = Path::new(path);
+
+    if !path.components().all(|c| matches!(c, Component::Normal(_))) {
+        return Err(eyre!("not a normal path"));
+    }
+
+    let mut file_path = PathBuf::from("html_pages");
+    file_path.push(path);
+    file_path.as_mut_os_string().push(".html");
+
+    let (status_line, mut contents) = write_in_stream(file_path)?;
+
+    let length = contents.metadata()?.len();
+    write!(
+        &mut buf.writer,
+        "{version} {status_line}\r\nContent-Length: {length}\r\n\r\n"
+    )?;
+    io::copy(&mut contents, &mut buf.writer)?;
     Ok(())
 }
 
-fn write_in_stream<T>(writer: &mut T, http_request: String) -> Result<(), eyre::Error>
-where
-    T: Write,
-{
-    let (status_line, filename) = match &http_request[..] {
-        "GET / HTTP/1.1" => ("HTTP/1.1 200 OK", "hello.html"),
-        "GET /sleep HTTP/1.1" => {
-            thread::sleep(Duration::from_secs(10));
-            ("HTTP/1.1 200 OK", "hello.html")
+fn write_in_stream(file_path: PathBuf) -> Result<(String, fs::File), eyre::Error> {
+    let (status_line, contents) = match fs::File::open(&file_path) {
+        Ok(cte) => ("200 Ok", cte),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            debug!(path = %file_path.display(), "file doesnt exist");
+
+            (
+                "400 NOT FOUND",
+                fs::File::open("html_pages/404.html").wrap_err("couldnt find 404 page")?,
+            )
         }
-        _ => ("HTTP/1.1 404 NOT FOUND", "404.html"),
+        Err(error) => {
+            error!(%error, path = %&file_path.display(), "couldnt read the file");
+            (
+                "500 INTERNAL SERVER ERROR",
+                fs::File::open("html_pages/500.html").wrap_err("couldnt find 500 page")?,
+            )
+        }
     };
-    let contents = fs::read_to_string(filename)?;
-    let length = contents.len();
-    let response = format!("{status_line}\r\nContent-Length: {length}\r\n\r\n{contents}");
-    writer.write_all(response.as_bytes())?;
-    Ok(())
+    Ok((status_line.to_string(), contents))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn http_req_test() {
-        let mut written_response = Vec::new();
-        let http_request = "GET / HTTP/1.1".to_string();
-        let http_response = "HTTP/1.1 200 OK".as_bytes();
-        write_in_stream(&mut written_response, http_request).unwrap();
-        assert_eq!(&written_response[..15], http_response);
+    fn req_version() {
+        use super::*;
+        let http_request = "GET /hello HTTP/1.1";
+        let (_method, _path, version) = parse_http_request(http_request).unwrap();
+        assert_eq!("HTTP/1.1", version);
+    }
+    #[test]
+    fn status_line_test() {
+        let (status_line, _) = write_in_stream(PathBuf::from("html_pages/hello.html")).unwrap();
+        assert_eq!(status_line, "200 Ok".to_string());
     }
 }
