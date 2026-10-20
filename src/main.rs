@@ -18,6 +18,9 @@ use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::signal;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 use eyre::{OptionExt, eyre};
@@ -61,23 +64,71 @@ async fn main() -> eyre::Result<()> {
                 .from_env_lossy(),
         )
         .try_init()?;
-    let listener = TcpListener::bind("127.0.0.1:7878").await.unwrap();
 
-    loop {
-        let (socket, _) = listener.accept().await.unwrap();
-        // A new task is spawned for each inbound socket. The socket is
-        // moved to the new task and processed there.
-        tokio::spawn(async move {
-            match handle_connection(socket).await {
-                Ok(()) => {
-                    info!("connection established");
-                }
-                Err(error) => {
-                    error!(%error ,"connection failed");
-                }
+    let token = CancellationToken::new();
+
+    let listener = TcpListener::bind("127.0.0.1:7878").await?;
+    let addr = listener.local_addr()?;
+    info!("started listening at http://{addr}");
+
+    let mut tasks: JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
+
+    tasks.spawn({
+        let token: CancellationToken = token.clone();
+        async move {
+            while let Some(result) = token.run_until_cancelled(listener.accept()).await {
+                let (socket, _) = result?;
+
+                tokio::spawn(async move {
+                    match handle_connection(socket).await {
+                        Ok(()) => {
+                            info!("connection established");
+                        }
+                        Err(error) => {
+                            error!(%error ,"connection failed");
+                        }
+                    }
+                });
             }
-        });
+
+            info!("listener exiting");
+
+            Ok(())
+        }
+    });
+    tasks.spawn({
+        let token = token.clone();
+        async move {
+            let Some(result) = token.run_until_cancelled(signal::ctrl_c()).await else {
+                debug!("canelled");
+                return Ok(());
+            };
+
+            result?;
+
+            info!("ctrl_c shutdown");
+
+            token.cancel();
+
+            Ok(())
+        }
+    });
+
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok(Ok(())) => info!("Connection task finished"),
+            Ok(Err(error)) => {
+                error!(%error, "task failed");
+                token.cancel();
+            }
+            Err(error) => {
+                error!(%error, "Connection task failed");
+                token.cancel();
+            }
+        }
     }
+
+    Ok(())
 }
 
 fn parse_http_request(http_request: &str) -> eyre::Result<(&str, &str, &str)> {
