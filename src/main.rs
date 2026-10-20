@@ -22,26 +22,44 @@ use std::{
     time::Duration,
 };
 
+use tracing::{debug, info};
+
 use example_web_service::ThreadPool;
 use eyre::Context;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+#[tracing::instrument]
 fn main() -> eyre::Result<()> {
     color_eyre::install()?;
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(tracing::Level::DEBUG.into())
+                .from_env_lossy(),
+        )
+        .try_init()?;
+
     let listener = TcpListener::bind("127.0.0.1:7878")?;
+
+    let addr = listener.local_addr()?;
+    info!("listening on http://{addr}");
+
     let pool = ThreadPool::new(4);
     for stream in listener.incoming() {
         let stream = stream.wrap_err("couldnt receive incoming connection")?;
         pool.execute(|| {
             if handle_connection(stream).is_ok() {
-                println!("connection established");
+                info!("connection established");
             } else {
-                println!("connection failed");
+                debug!("connection failed");
             }
         });
     }
 
     Ok(())
 }
+
 fn handle_connection(stream: TcpStream) -> eyre::Result<()> {
     let buf_reader = BufReader::new(&stream);
     let mut buf_writer = BufWriter::new(&stream);
