@@ -57,14 +57,14 @@ jobs:
           persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
       - parallel:
-          - name: Create Astarte Cluster
-            id: astarte
-            uses: astarte-platform/astarte-cluster-action@11198ae9f8b4b1d334063a6ce6c1015da631c6ff # v2.0.0
-            with:
-              astarte_version: 1.3.0
+          # - name: Create Astarte Cluster
+          #   id: astarte
+          #   uses: astarte-platform/astarte-cluster-action@11198ae9f8b4b1d334063a6ce6c1015da631c6ff # v2.0.0
+          #   with:
+          #     astarte_version: 1.3.0
           - uses: $/.github/actions/install-deps
           - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - run: ./scripts/ci/e2e-test.sh
-      - name: post
-        if: ${{ always() }}
-        run: ./scripts/ci/e2e-post.sh
+      # - name: post
+      #   if: ${{ always() }}
+      #   run: ./scripts/ci/e2e-post.sh

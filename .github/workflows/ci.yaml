@@ -61,8 +61,8 @@ jobs:
   common:
     uses: $/.github/workflows/common.yaml
 
-  # e2e-test:
-  #   uses: $/.github/workflows/e2e-test.yaml
+  e2e-test:
+    uses: $/.github/workflows/e2e-test.yaml
 
   multi-platform:
     uses: $/.github/workflows/multi-platform.yaml
