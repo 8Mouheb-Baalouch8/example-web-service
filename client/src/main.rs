@@ -34,7 +34,7 @@ async fn main() -> eyre::Result<()> {
     for _ in 0..10 {
         let client = Client::new();
 
-        let response = client.get("http://127.0.0.1:7878/hello").send().await?;
+        let response = client.get("http://127.0.0.1:7877/hello").send().await?;
 
         info!("Status: {}", response.status());
 
