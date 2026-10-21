@@ -14,10 +14,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use eyre::Ok;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Message {
+    email: String,
+    password: String,
+}
 
 #[tracing::instrument]
 #[tokio::main]
@@ -31,18 +37,29 @@ async fn main() -> eyre::Result<()> {
                 .from_env_lossy(),
         )
         .try_init()?;
-    for _ in 0..10 {
-        let client = Client::new();
 
-        let response = client.get("http://127.0.0.1:7877/hello").send().await?;
+    let client = Client::new();
 
-        info!("Status: {}", response.status());
+    let _response = client.get("http://127.0.0.1:7877/hello").send().await?;
 
-        info!("Headers: {:#?}", response.headers());
+    let msg = Message {
+        email: "mouhebbbaalouch@gmail.com".to_string(),
+        password: "123456789".to_string(),
+    };
 
-        let body = response.text().await?;
+    let credentials_response = client
+        .post("http://127.0.0.1:7877/credentials")
+        .json(&msg)
+        .send()
+        .await?;
 
-        info!("Response body:\n{}", body);
-    }
+    info!("Status: {}", credentials_response.status());
+
+    info!("Headers: {:#?}", credentials_response.headers());
+
+    let body = credentials_response.text().await?;
+
+    info!("credentials_response body:\n{}", body);
+
     Ok(())
 }

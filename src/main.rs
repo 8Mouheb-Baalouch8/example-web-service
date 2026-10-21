@@ -14,13 +14,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use axum::Json;
+
 use tracing::{error, info};
 
 use tokio::net::TcpListener;
 
-use axum::{Router, extract::Path, response::Html, routing::get};
+use axum::{Router, extract::Path, response::Html, routing::get, routing::post};
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Message {
+    email: String,
+    password: String,
+}
 
 async fn get_hello(Path(page): Path<String>) -> Html<String> {
     info!("page: {page}");
@@ -42,6 +52,15 @@ async fn get_hello(Path(page): Path<String>) -> Html<String> {
     }
 }
 
+async fn post_credentials(Json(msg): Json<Message>) -> String {
+    match serde_json::to_string(&msg) {
+        Ok(m) => {
+            info!(r#"{m}"#);
+            m
+        }
+        Err(_) => "internal server error".to_string(),
+    }
+}
 #[tracing::instrument]
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -57,7 +76,9 @@ async fn main() -> eyre::Result<()> {
 
     //let token = CancellationToken::new();
 
-    let app = Router::new().route("/{key}", get(get_hello));
+    let app = Router::new()
+        .route("/{key}", get(get_hello))
+        .route("/credentials", post(post_credentials));
     let listener = TcpListener::bind("127.0.0.1:7877").await?;
 
     axum::serve(listener, app).await?;
